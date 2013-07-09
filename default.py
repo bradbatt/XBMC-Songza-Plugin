@@ -1,132 +1,269 @@
-# -*- coding: utf-8 -*-
+import json
 import sys
-import os, datetime, xbmcplugin, xbmcgui, xbmc, xbmcaddon
-import simplejson as json
-#extra imports
-from resources.lib.functions import *
-from resources.lib.rlocas import *
+import urllib
+import urlparse
+import xbmc
+import xbmcgui
+import xbmcplugin
+import xbmcvfs
+from datetime import datetime
+from resources.lib import requests
+from resources.lib.requests import utils
+from resources.lib.requests import cookies
 
-appdata = xbmc.validatePath(xbmc.translatePath(xbmcaddon.Addon('plugin.audio.songza').getAddonInfo('profile')))
+CACHE_DIR = 'special://temp/songza/'
+CACHED_JSON_FILE = CACHE_DIR + 'concierge.json'
+CACHED_COOKIES_FILE = CACHE_DIR + 'cookies'
+CACHED_ICON_FILE = CACHE_DIR + '%s.jpg'
+PLUGIN_URL = sys.argv[0] + '?'
+HANDLE = int(sys.argv[1])
 
-if not os.path.isdir(appdata):
-    os.makedirs(appdata)
-#Day and Day-Period dictionaries
-day_name = {0: "Sunday", 1: "Monday", 2: "Tuesday", 3: "Wednesday",
-            4: "Thursday", 5: "Friday", 6: "Saturday",}
-period_name = {0: "Morning", 1: "Late Morning", 2: "Afternoon",
-            3: "Evening", 4: "Night", 5: "Late Night",} 
+def GetArguments():
+    return urlparse.parse_qs((sys.argv[2])[1:])
 
-#Calculate Songza Day and Period 
-tdelta = datetime.timedelta
-now = datetime.datetime.now()
-day_start = datetime.datetime(now.year,now.month,now.day)
-sz_day = 0 if now.isoweekday()==7 else now.isoweekday()
 
-if now < (day_start+tdelta(hours=4)):
-    sz_day = 6 if sz_day==0 else sz_day-1
-    sz_period = 5
-    next
-elif now < (day_start+tdelta(hours=8)):
-    sz_period = 0
-    next
-elif now < (day_start+tdelta(hours=12)):
-    sz_period = 1
-    next
-elif now < (day_start+tdelta(hours=16)):
-    sz_period = 2
-    next
-elif now < (day_start+tdelta(hours=20)):
-    sz_period = 3
-    next
+def GetData(url, params=None):
+    session = LoadSession()
+    cookies = dict(sessionid=str(session))
+    r = requests.get(url, params=params, cookies=cookies)
+    cookies = requests.utils.dict_from_cookiejar(r.cookies)
+    if 'sessionid' in cookies:
+        StoreSession(cookies['sessionid'])
+    if r.text == 'rate limit exceeded':
+        line1 = "You can't skip songs that quickly"
+        time = 2000  #in miliseconds
+        xbmc.executebuiltin('Notification(%s, %s, %d, %s)'%(__addonname__,line1, time, __icon__))
+        return None
+    data = r.json()
+    return data
+
+
+def StoreSession(session):
+    if not xbmcvfs.exists(CACHE_DIR):
+        xbmcvfs.mkdir(CACHE_DIR)
+
+    if xbmcvfs.exists(CACHED_COOKIES_FILE):
+        xbmcvfs.delete(CACHED_COOKIES_FILE)
+        
+    dataFile = xbmcvfs.File(CACHED_COOKIES_FILE, 'w')
+    dataFile.write(session)
+    dataFile.close()
+
+def LoadSession():
+    if not xbmcvfs.exists(CACHED_COOKIES_FILE):
+        return None
+
+    dataFile = xbmcvfs.File(CACHED_COOKIES_FILE)
+    session = dataFile.read()
+    dataFile.close()
+    return session
+
+def StoreData(data):
+    if not xbmcvfs.exists(CACHE_DIR):
+        xbmcvfs.mkdir(CACHE_DIR)
+
+    if xbmcvfs.exists(CACHED_JSON_FILE):
+        xbmcvfs.delete(CACHED_JSON_FILE)
+
+    dataFile = xbmcvfs.File(CACHED_JSON_FILE, 'w')
+    dataFile.write(json.dumps(data))
+    dataFile.close()
+
+
+def GetStoredData():
+    dataFile = xbmcvfs.File(CACHED_JSON_FILE)
+    contents = dataFile.read()
+    data = json.loads(contents[0:])
+    dataFile.close()
+    return data
+
+
+def StoreIcon(id):
+    if not xbmcvfs.exists(CACHE_DIR):
+        xbmcvfs.mkdir(CACHE_DIR)
+
+    filePath = CACHED_ICON_FILE % id
+    if xbmcvfs.exists(filePath):
+        #TODO: Delete and refresh if X age - xbmcvfs.delete(filePath)
+        return filePath
+
+    url = 'http://songza.com/api/1/station/%s/image?size=180' % id
+    response = requests.get(url)
+    if response.status_code == 200:
+
+        dataFile = open(xbmc.translatePath(filePath), 'wb')
+        for chunk in response.iter_content():
+            dataFile.write(chunk)
+        dataFile.close()
+        response.close()
+
+    return filePath
+
+
+def AddMenuEntry(title, url=None, isFolder=True, description='', iconImage='DefaultMusicPlaylists.png'):
+    listItem = xbmcgui.ListItem(unicode(title), iconImage=iconImage)
+    listItem.setInfo('music', {'title': title})
+    listItem.setProperty('Album_Description', description)
+    listItem.setThumbnailImage(iconImage)
+    return xbmcplugin.addDirectoryItem(handle=HANDLE, url=url, listitem=listItem, isFolder=isFolder)
+
+
+def GenerateList(data, titleKey, queryParam, dataKey, descriptionKey=None, iconKey=None, isFolder=True, conditionalKey=None, conditionalValue=None):
+    for item in data:
+        title = item[titleKey]
+        url = PLUGIN_URL + urllib.urlencode({queryParam: item[dataKey]})
+        description = item[descriptionKey] if descriptionKey is not None else ''
+        icon = 'DefaultMusicPlaylists.png'
+        if iconKey is not None:
+            icon = StoreIcon(item[iconKey])
+        if conditionalKey is None or conditionalValue is None or item[conditionalKey] == conditionalValue:
+            AddMenuEntry(title, url, isFolder, description, icon)
+
+    xbmcplugin.endOfDirectory(HANDLE)
+
+
+def ListModes():
+    data = [{'name': 'Concierge', 'id': 1}, {'name': 'Popular', 'id': 2}, {'name': 'Browse', 'id': 3}]
+    GenerateList(data, 'name', 'mode', 'id')
+
+
+def ListScenarios():
+    current_date = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')
+    period = ((datetime.now().hour / 4) - 1) % 6
+    if period == 5:
+        day = datetime.now().isoweekday() - 1  # If period is late night, then set day to yesterday
+    else:
+        day = datetime.now().isoweekday() % 7
+
+    url = 'http://songza.com/api/1/situation/targeted?current_date=%s&' % current_date
+    params = urllib.urlencode({
+        'day': day,
+        'period': period,
+        'device': 'web',
+        'site': 'songza',
+        'optimizer': 'default',
+        'max_situations': 5,
+        'max_stations': 3
+    })
+
+    data = GetData(url, params)
+    StoreData(data)
+    GenerateList(data, 'title', 'scenario', 'title')
+
+
+def ListSituations(scenario):
+    data = GetStoredData()
+
+    if xbmcvfs.exists(CACHED_COOKIES_FILE):
+        xbmcvfs.delete(CACHED_COOKIES_FILE)
+
+    for scenarioData in data:
+        if scenarioData['title'] == scenario:
+            GenerateList(scenarioData['situations'], 'title', 'stations', 'station_ids')
+
+
+def ListCharts():
+    data = [{'name': 'Trending', 'id': 'trending'}, {'name': 'This Year', 'id': 'all-time'}]
+    GenerateList(data, 'name', 'chart', 'id')
+
+
+def ListChartStations(chart):
+    url = 'http://songza.com/api/1/chart/name/songza/%s' % chart
+    data = GetData(url)
+    GenerateList(data, 'name', 'station', 'id', 'description', 'id', False, 'status', 'NORMAL')
+
+
+def ListCategories():
+    url = 'http://songza.com/api/1/tags'
+    data = GetData(url)
+    GenerateList(data, 'name', 'tag', 'id')
+
+
+def ListSubcategories(tag):
+    url = 'http://songza.com/api/1/gallery/tag/%s' % tag
+    data = GetData(url)
+    GenerateList(data, 'name', 'stations', 'station_ids')
+
+
+def ListStations(stations):
+    url = 'http://songza.com/api/1/station/multi?'
+
+    params = ''
+    keys = []
+    for i in range(len(stations)):
+        keys.append('id')
+    ids = zip(keys, stations)
+    params = urllib.urlencode(ids)
+
+    data = GetData(url, params)
+
+    GenerateList(data, 'name', 'station', 'id', 'description', 'id', False, 'status', 'NORMAL')
+
+
+def PlayStation(station):
+    # Get and clear the music playlist
+    playlist = xbmc.PlayList(xbmc.PLAYLIST_MUSIC)
+    playlist.clear()
+
+    # Queue the next song
+    QueueNextTrack(playlist, station)
+
+    # Start playing the playlist
+    player = xbmc.Player()
+    player.play(playlist)
+
+
+def QueueNextTrack(playlist, station):
+    next = GetData('http://songza.com/api/1/station/%s/next' % station)
+
+    if next is None:
+        return
+
+    xbmc.log('Song queued: ' + next['song']['title'])
+
+    # Create ListItem from next song info
+    listItem = xbmcgui.ListItem(unicode(next['song']['title']), unicode(next['song']['artist']['name']))
+    listItem.setInfo('music', {'duration': next['song']['duration'], 'genre': next['song']['genre'], 'album': next['song']['album'], 'artist': next['song']['artist']['name'], 'title': next['song']['title']})
+    listItem.setThumbnailImage(next['song']['cover_url'])
+
+    # Need to add codec info for XBMC to pick the correct player
+    listItem.addStreamInfo('audio', {'codec': 'mp3'})
+
+    url = PLUGIN_URL + 'station=' + str(station) + '&play=' + urllib.quote(next['listen_url'])
+    playlist.add(url, listItem)
+
+
+def PlayTrack(station, url):
+    # Tell XBMC which URL to stream the song from
+    listItem = xbmcgui.ListItem(path=url)
+    xbmcplugin.setResolvedUrl(HANDLE, True, listItem)
+
+    # Queue the next song from the station
+    playlist = xbmc.PlayList(xbmc.PLAYLIST_MUSIC)
+    if playlist.getposition() > (len(playlist) - 3):
+        QueueNextTrack(playlist, station)
+
+
+args = GetArguments()
+
+if 'play' in args:
+    PlayTrack(args['station'][0], args['play'][0])
+elif 'station' in args:
+    PlayStation(args['station'][0])
+elif 'stations' in args:
+    ListStations(json.loads(args['stations'][0]))
+elif 'chart' in args:
+    ListChartStations(args['chart'][0])
+elif 'tag' in args:
+    ListSubcategories(args['tag'][0])
+elif 'scenario' in args:
+    ListSituations(urllib.unquote(args['scenario'][0]))
+elif 'mode' in args:
+    if int(args['mode'][0]) == 1:  # Concierge
+        ListScenarios()
+    elif int(args['mode'][0]) == 2:  # Popular
+        ListCharts()
+    elif int(args['mode'][0]) == 3:  # Browse
+        ListCategories()
 else:
-    sz_period = 4
-
-mode=None
-params=get_params()
-try:
-        mode=str(params['mode'])
-except:
-        pass
-
-if mode==None:
-    add_dir('Concierge ({0!s} {1!s})'.format(day_name[sz_day],period_name[sz_period]),'?mode=situations&sz_day='+str(sz_day)+'&sz_period='+str(sz_period))
-    add_dir('Choose another time','?mode=day')
-    add_dir('Popular','?mode=popular')
-    add_dir('Browse All','?mode=browse')
-    
-if mode=='day':
-    for (day_id, day_title) in day_name.items():
-        add_dir(day_title,'?mode=period&sz_day='+str(day_id))
-
-if mode=='period':
-    for (period_id, period_title) in period_name.items():
-        sz_day=str(params['sz_day'])
-        add_dir(period_title,'?mode=situations&sz_day='+sz_day+'&sz_period='+str(period_id))
-
-if mode=='popular':
-    r = OpenUrl('http://songza.com/api/1/chart/name/songza/all-time')
-    r = json.loads(r)
-    for item in r:
-        add_file(item['name'],'?mode=player&station='+str(item['id']),item['cover_url'])
-
-if mode=='browse':
-    r = OpenUrl('http://songza.com/api/1/tags')
-    r = json.loads(r)
-    for item in r:
-        add_dir(item['name'],'?mode=subbrowse&sz_browse='+item['id'])
-
-if mode=='subbrowse':
-    sz_browse=str(params['sz_browse'])
-    r = 'http://songza.com/api/1/gallery/tag/'+sz_browse
-    r = OpenUrl(r)
-    r = json.loads(r)
-    for item in r:
-        add_dir(item['name'],'?mode=stations&sz_stations='+item['id'])
-        f = open(os.path.join(appdata,item['id']), 'w+')
-        f.write(json.dumps(item['station_ids']))
-        f.close()
-
-if mode=='stations':
-    sz_stations=str(params['sz_stations'])
-    f = open(os.path.join(appdata,sz_stations), 'r')
-    values = json.loads(f.read())
-    f.close()
-    query = '&id='.join(str(v) for v in values)
-    r = 'http://songza.com/api/1/station/multi?id='+query
-    r = OpenUrl(r)
-    r = json.loads(r)
-    for item in r:
-        add_file(item['name'],'?mode=player&station='+str(item['id']),item['cover_url'])
-    
-if mode=='situations':
-    sz_day=str(params['sz_day'])
-    sz_period=str(params['sz_period'])
-    r = 'http://songza.com/api/1/situation/targeted?device=web&site=songza&current_date='+str(now.isoformat())+'&day='+sz_day+'&period='+sz_period
-    r = OpenUrl(r)
-    r = json.loads(r)
-    for item in r:
-        add_dir(item['title'],'?mode=situations2&sz_situation='+item['id'],item['icon'])
-        f = open(os.path.join(appdata,item['id']), 'w+')
-        f.write(json.dumps(item['situations']))
-        f.close()
-
-if mode=='situations2':
-    sz_situation=str(params['sz_situation'])
-    fr = open(os.path.join(appdata,sz_situation), 'r')
-    r = json.loads(fr.read())
-    for item in r:
-        add_dir(item['title'],'?mode=stations&sz_stations='+item['id'],item['icon'])
-        f = open(os.path.join(appdata,item['id']), 'w+')
-        f.write(json.dumps(item['station_ids']))
-        f.close()
-    fr.close()
-    
-if mode=='player':
-    args = GetArguments()
-    if 'play' in args:
-        PlayTrack(args['station'][0], args['play'][0])
-    elif 'station' in args:
-        PlayStation(args['station'][0])
-
-if not mode=='player':
-    xbmcplugin.endOfDirectory(int(sys.argv[1]), cacheToDisc=False)
+    ListModes()
