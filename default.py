@@ -17,9 +17,6 @@ CACHED_COOKIES_FILE = CACHE_DIR + 'cookies'
 CACHED_ICON_FILE = CACHE_DIR + '%s.jpg'
 PLUGIN_URL = sys.argv[0] + '?'
 HANDLE = int(sys.argv[1])
-ADDON       = xbmcaddon.Addon()
-ADDONNAME   = ADDON.getAddonInfo('name')
-ICON        = ADDON.getAddonInfo('icon')
 
 def GetArguments():
     return urlparse.parse_qs((sys.argv[2])[1:])
@@ -35,7 +32,7 @@ def GetData(url, params=None):
     if r.text == 'rate limit exceeded':
         line1 = "You can't skip songs that quickly"
         time = 2000  #in miliseconds
-        xbmc.executebuiltin('Notification(%s, %s, %d, %s)'%(ADDONNAME,line1, time, ICON))
+        xbmc.executebuiltin('Notification(%s, %s, %d, %s)'%(__addonname__,line1, time, __icon__))
         return None
     data = r.json()
     return data
