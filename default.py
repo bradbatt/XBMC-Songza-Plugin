@@ -4,6 +4,7 @@ import urllib
 import urlparse
 import xbmc
 import xbmcgui
+import xbmcaddon
 import xbmcplugin
 import xbmcvfs
 from datetime import datetime
