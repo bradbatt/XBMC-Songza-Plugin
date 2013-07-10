@@ -7,6 +7,7 @@ import xbmcgui
 import xbmcaddon
 import xbmcplugin
 import xbmcvfs
+import time
 from datetime import datetime
 from resources.lib import requests
 from resources.lib.requests import utils
@@ -244,7 +245,8 @@ def PlayTrack(station, url):
 
     # Queue the next song from the station
     playlist = xbmc.PlayList(xbmc.PLAYLIST_MUSIC)
-    if playlist.getposition() > (len(playlist) - 3):
+    while playlist.getposition() > (len(playlist) - 3):
+        time.sleep(3)
         QueueNextTrack(playlist, station)
 
 
