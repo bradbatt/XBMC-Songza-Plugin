@@ -22,6 +22,7 @@ HANDLE = int(sys.argv[1])
 ADDON       = xbmcaddon.Addon()
 ADDONNAME   = ADDON.getAddonInfo('name')
 ICON        = ADDON.getAddonInfo('icon')
+USERID = ADDON.getSetting('userid')
 
 def GetArguments():
     return urlparse.parse_qs((sys.argv[2])[1:])
@@ -128,7 +129,11 @@ def GenerateList(data, titleKey, queryParam, dataKey, descriptionKey=None, iconK
 
 
 def ListModes():
-    data = [{'name': 'Concierge', 'id': 1}, {'name': 'Popular', 'id': 2}, {'name': 'Browse', 'id': 3}]
+    if(USERID == ""):
+        data = [{'name': 'Concierge', 'id': 1}, {'name': 'Popular', 'id': 2}, {'name': 'Browse', 'id': 3}, {'name': 'Search Playlists', 'id': 4}, {'name': 'Search Artists', 'id': 5}]
+    else:
+        data = [{'name': 'Concierge', 'id': 1}, {'name': 'Popular', 'id': 2}, {'name': 'Browse', 'id': 3}, {'name': 'Recent', 'id': 4}, {'name': 'My Playlists', 'id': 5}, {'name': 'Search Playlists', 'id': 6}, {'name': 'Search Artists', 'id': 7}]
+
     GenerateList(data, 'name', 'mode', 'id')
 
 
@@ -218,6 +223,7 @@ def PlayStation(station):
     player.play(playlist)
 
 
+
 def QueueNextTrack(playlist, station):
     next = GetData('http://songza.com/api/1/station/%s/next' % station)
 
@@ -249,6 +255,43 @@ def PlayTrack(station, url):
         time.sleep(3)
         QueueNextTrack(playlist, station)
 
+def SearchPlaylists():
+    keyboard = xbmc.Keyboard()
+    keyboard.doModal()
+    query = keyboard.getText()
+    if (query == ""):
+        return
+
+    url = 'http://songza.com/api/1/search/station?query=%s' % query
+    data = GetData(url)
+    GenerateList(data, 'name', 'station', 'id', 'description', 'id', False, 'status', 'NORMAL')
+
+def SearchArtists():
+    keyboard = xbmc.Keyboard()
+    keyboard.doModal()
+    query = keyboard.getText()
+    if (query == ""):
+        return
+
+    url = 'http://songza.com/api/1/search/artist?query=%s' % query
+    data = GetData(url)
+    GenerateList(data, 'name', 'artist', 'id')
+
+def ListArtistsStations(artistid):
+    url = 'http://songza.com/api/1/artist/%s/stations' % artistid
+    data = GetData(url)
+    GenerateList(data, 'name', 'station', 'id', 'description', 'id', False, 'status', 'NORMAL')
+
+def ListRecent():
+    url = 'http://songza.com/api/1/user/%s/stations?limit=40&recent=1' % USERID
+    data = GetData(url)
+    GenerateList(data['recent']['stations'], 'name', 'station', 'id', 'description', 'id', False, 'status', 'NORMAL')
+
+def ListMyPlaylists():
+    url = 'http://songza.com/api/1/collection/user/%s' % USERID
+    data = GetData(url)
+    GenerateList(data, 'title', 'stations', 'station_ids')
+
 
 args = GetArguments()
 
@@ -264,6 +307,8 @@ elif 'tag' in args:
     ListSubcategories(args['tag'][0])
 elif 'scenario' in args:
     ListSituations(urllib.unquote(args['scenario'][0]))
+elif 'artist' in args:
+    ListArtistsStations(args['artist'][0])
 elif 'mode' in args:
     if int(args['mode'][0]) == 1:  # Concierge
         ListScenarios()
@@ -271,5 +316,13 @@ elif 'mode' in args:
         ListCharts()
     elif int(args['mode'][0]) == 3:  # Browse
         ListCategories()
+    elif int(args['mode'][0]) == 4:  # Recent
+        ListRecent()
+    elif int(args['mode'][0]) == 5:  # My Playlists
+        ListMyPlaylists()
+    elif int(args['mode'][0]) == 6:  # Search Playlists
+        SearchPlaylists()
+    elif int(args['mode'][0]) == 7:  # Search Artists
+        SearchArtists()
 else:
     ListModes()

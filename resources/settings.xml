@@ -1,0 +1,4 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<settings>
+ <setting id="userid" type="text" label="User ID (from profile)" />
+</settings>
